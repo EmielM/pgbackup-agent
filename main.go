@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
@@ -34,12 +35,21 @@ var config struct {
 
 func main() {
 
-	var err error
-
-	cmd := ""
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+	if len(os.Args) == 1 {
+		os.Stdout.Write(([]byte)(`usage:
+  pgbackup stream: capture, encrypt & upload wal stream
+  pgbackup basebackup: create, encrypt & upload basebackup
+  pgbackup restore [lsn] [dir]: attempt to rebuild database in [dir] (eg db/) and restore up to [lsn] (eg 01/00004000)
+  pgbackup fetch [segment] [dest]: fetch wal segment from storage (used internally by restore_command)
+  pgbackup status: get status summary from server
+  pgbackup setup: setup ~/pgbackup.conf
+`))
+		return
 	}
+
+	cmd := os.Args[1]
+
+	var err error
 
 	if cmd == "setup" {
 		// pgbackup setup
@@ -65,17 +75,17 @@ func main() {
 
 	var restartN int
 restart:
-	// future: derive key from systemId+secret and use for tls server auth
+	err = errors.New("no such subcommand")
 	if cmd == "stream" {
 		// pgbackup stream
 		err = Stream()
 		log.Print(err)
-		sleep := restartN * restartN * 5
+		restartN++
+		sleep := restartN * restartN
 		if sleep > 100 {
 			sleep = 100
 		}
 		time.Sleep(time.Duration(sleep) * time.Second)
-		restartN++
 		goto restart
 
 	} else if cmd == "basebackup" {
@@ -94,14 +104,7 @@ restart:
 		err = Status()
 
 	} else {
-		os.Stdout.Write(([]byte)(`usage:
-  pgbackup stream: capture, encrypt & upload wal stream
-  pgbackup basebackup: create, encrypt & upload basebackup
-  pgbackup restore [lsn] [dir]: attempt to rebuild database in [dir] (eg db/) and restore up to [lsn] (eg 01/00004000)
-  pgbackup fetch [segment] [dest]: fetch wal segment from storage (used internally by restore_command)
-  pgbackup status: get status summary from server
-  pgbackup setup: setup ~/pgbackup.conf
-`))
+
 	}
 
 	if err != nil {
@@ -139,6 +142,16 @@ func Fetch(segment, target string) error {
 	}
 
 	_, err = io.CopyN(f, r, n)
+	if err != nil {
+		return err
+	}
+
+	if n < 0x1000000 {
+		// fill up segment remaining with 0s
+		b := make([]byte, 0x1000000-n)
+		io.CopyN(f, bytes.NewReader(b), 0x1000000-n)
+	}
+
 	return err
 }
 
